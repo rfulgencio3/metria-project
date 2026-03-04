@@ -545,32 +545,68 @@ public static class BillingEndpoints
             var emailFromToken = user.GetEmail();
             if (string.IsNullOrWhiteSpace(emailFromToken)) return Results.Unauthorized();
         
-            log.LogInformation("/api/billing/sync called by user {Email} with payload: subscriptionId={SubId}, customerId={CustId}, email={Email}", 
-                emailFromToken, req.SubscriptionId, req.CustomerId, req.Email);
+            log.LogInformation("/api/billing/sync called by user {Email} with payload: checkoutSessionId={SessionId}, subscriptionId={SubId}, customerId={CustId}, email={Email}",
+                emailFromToken, req.CheckoutSessionId, req.SubscriptionId, req.CustomerId, req.Email);
         
             var subService = new StripeSubscriptionService();
             var custService = new Stripe.CustomerService();
             StripeSubscription? sub = null;
+            string? emailHintFromCheckout = null;
         
             try
             {
                 log.LogInformation("Attempting to find subscription in Stripe...");
-                
-                if (!string.IsNullOrWhiteSpace(req.SubscriptionId))
+
+                if (!string.IsNullOrWhiteSpace(req.CheckoutSessionId))
+                {
+                    log.LogInformation("Searching by checkout session ID: {SessionId}", req.CheckoutSessionId);
+                    try
+                    {
+                        var checkoutService = new CheckoutSessionService();
+                        var checkoutSession = await checkoutService.GetAsync(req.CheckoutSessionId);
+
+                        emailHintFromCheckout = checkoutSession.CustomerDetails?.Email ?? checkoutSession.CustomerEmail;
+
+                        if (!string.IsNullOrWhiteSpace(checkoutSession.SubscriptionId))
+                        {
+                            log.LogInformation("Checkout session resolved subscription ID: {SubId}", checkoutSession.SubscriptionId);
+                            sub = await subService.GetAsync(checkoutSession.SubscriptionId);
+                        }
+                        else if (!string.IsNullOrWhiteSpace(checkoutSession.CustomerId))
+                        {
+                            log.LogInformation("Checkout session has customer ID {CustId} but no subscription ID yet. Searching customer subscriptions...", checkoutSession.CustomerId);
+                            var byCustomer = await subService.ListAsync(new Stripe.SubscriptionListOptions { Customer = checkoutSession.CustomerId, Limit = 10, Status = "all" });
+                            sub = byCustomer.Data?.FirstOrDefault(stripeSubscription => stripeSubscription.Status == "active" || stripeSubscription.Status == "trialing")
+                                ?? byCustomer.Data?.FirstOrDefault();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        log.LogWarning(ex, "Failed to resolve subscription via checkout session {SessionId}", req.CheckoutSessionId);
+                    }
+                }
+
+                if (sub == null && !string.IsNullOrWhiteSpace(req.SubscriptionId))
                 {
                     log.LogInformation("Searching by subscription ID: {SubId}", req.SubscriptionId);
                     sub = await subService.GetAsync(req.SubscriptionId);
                 }
-                else if (!string.IsNullOrWhiteSpace(req.CustomerId))
+
+                if (sub == null && !string.IsNullOrWhiteSpace(req.CustomerId))
                 {
                     log.LogInformation("Searching by customer ID: {CustId}", req.CustomerId);
                     var list = await subService.ListAsync(new Stripe.SubscriptionListOptions { Customer = req.CustomerId, Limit = 10 });
                     sub = list.Data?.FirstOrDefault(stripeSubscription => stripeSubscription.Status == "active" || stripeSubscription.Status == "trialing") ?? list.Data?.FirstOrDefault();
                     log.LogInformation("Found {Count} subscriptions for customer, selected: {SubId}", list.Data?.Count ?? 0, sub?.Id);
                 }
-                else
+
+                if (sub == null)
                 {
-                    var targetEmail = string.IsNullOrWhiteSpace(req.Email) ? emailFromToken : req.Email!.Trim().ToLowerInvariant();
+                    var targetEmail = !string.IsNullOrWhiteSpace(req.Email)
+                        ? req.Email!.Trim().ToLowerInvariant()
+                        : (!string.IsNullOrWhiteSpace(emailHintFromCheckout)
+                            ? emailHintFromCheckout.Trim().ToLowerInvariant()
+                            : emailFromToken);
                     log.LogInformation("Searching by email: {Email}", targetEmail);
                     
                     // Estratégia 1: Buscar customers por email

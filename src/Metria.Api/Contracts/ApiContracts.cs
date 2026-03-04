@@ -11,4 +11,4 @@ public record UpdateGoalDto(bool Done);
 public record UpdatePreferencesDto(string? Name, string? BirthDate);
 public record CheckoutReq(string PriceId, string? SuccessUrl, string? CancelUrl);
 public record PortalReq(string? ReturnUrl);
-public record SyncReq(string? SubscriptionId, string? CustomerId, string? Email);
+public record SyncReq(string? SubscriptionId, string? CustomerId, string? Email, string? CheckoutSessionId);
