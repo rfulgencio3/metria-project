@@ -290,12 +290,31 @@ public static class BillingEndpoints
         {
             using var reader = new StreamReader(http.Body);
             var json = await reader.ReadToEndAsync();
+            var hasSignatureHeader = http.Headers.ContainsKey("Stripe-Signature");
             var signature = http.Headers["Stripe-Signature"].ToString();
             var webhookSecret = Environment.GetEnvironmentVariable("STRIPE_WEBHOOK_SECRET") ?? cfg["Stripe:WebhookSecret"];
+            var webhookSecretLength = webhookSecret?.Length ?? 0;
+            string? rawEventId = null;
+            try
+            {
+                using var eventDoc = JsonDocument.Parse(json);
+                if (eventDoc.RootElement.TryGetProperty("id", out var eventIdEl))
+                {
+                    rawEventId = eventIdEl.GetString();
+                }
+            }
+            catch
+            {
+                // Best-effort parse only for observability in signature failures.
+            }
             
             if (string.IsNullOrWhiteSpace(webhookSecret)) 
             {
-                log.LogError("Webhook secret not configured");
+                log.LogError(
+                    "Webhook secret not configured. EventId={EventId} SecretLen={SecretLen} HasStripeSignatureHeader={HasStripeSignatureHeader}",
+                    rawEventId ?? "unknown",
+                    webhookSecretLength,
+                    hasSignatureHeader);
                 return Results.BadRequest("Webhook secret não configurado");
             }
         
@@ -306,8 +325,14 @@ public static class BillingEndpoints
             } 
             catch (Exception ex) 
             {
-                log.LogError(ex, "Stripe webhook signature validation failed. HasSig={HasSig} PayloadLen={Len}", 
-                    !string.IsNullOrWhiteSpace(signature), json?.Length ?? 0);
+                log.LogError(
+                    ex,
+                    "Stripe webhook signature validation failed. EventId={EventId} SecretLen={SecretLen} HasStripeSignatureHeader={HasStripeSignatureHeader} HasSignatureValue={HasSignatureValue} PayloadLen={PayloadLen}",
+                    rawEventId ?? "unknown",
+                    webhookSecretLength,
+                    hasSignatureHeader,
+                    !string.IsNullOrWhiteSpace(signature),
+                    json?.Length ?? 0);
                 return Results.BadRequest("Invalid webhook signature");
             }
         
