@@ -480,16 +480,10 @@ public static class BillingEndpoints
                                 var sub = await subsService.GetAsync(session.SubscriptionId);
                                 await UpsertSubscription(sub, userId, db, cfg, log);
                             }
-                            else if (string.Equals(session.Mode, "payment", StringComparison.OrdinalIgnoreCase)
-                                && string.Equals(session.PaymentStatus, "paid", StringComparison.OrdinalIgnoreCase))
-                            {
-                                // Payment Link (one-time payment) fallback.
-                                _ = await UpsertPaymentLinkPurchase(session, userId, db, cfg, log);
-                            }
                             else
                             {
                                 log.LogInformation(
-                                    "Checkout session without subscription/payment confirmation ignored. sessionId={SessionId} mode={Mode} paymentStatus={PaymentStatus}",
+                                    "Checkout session without subscription ignored. sessionId={SessionId} mode={Mode} paymentStatus={PaymentStatus}",
                                     session.Id, session.Mode, session.PaymentStatus);
                             }
         
@@ -632,87 +626,6 @@ public static class BillingEndpoints
             log.LogInformation("Upserted subscription {SubscriptionId} for user {UserId}", stripeSubscription.Id, userId);
         }
 
-        async Task<SubscriptionPlan> UpsertPaymentLinkPurchase(CheckoutSession session, Guid userId, AppDbContext db,
-            IConfiguration cfg, ILogger<Program> log)
-        {
-            var monthlyPaymentLinkId = Environment.GetEnvironmentVariable("STRIPE_MONTHLY_PAYMENT_LINK_ID") ?? cfg["Stripe:MonthlyPaymentLinkId"];
-            var annualPaymentLinkId = Environment.GetEnvironmentVariable("STRIPE_ANNUAL_PAYMENT_LINK_ID") ?? cfg["Stripe:AnnualPaymentLinkId"];
-
-            var plan = SubscriptionPlan.Monthly;
-            if (!string.IsNullOrWhiteSpace(annualPaymentLinkId) && string.Equals(session.PaymentLinkId, annualPaymentLinkId, StringComparison.Ordinal))
-            {
-                plan = SubscriptionPlan.Annual;
-            }
-            else if (!string.IsNullOrWhiteSpace(monthlyPaymentLinkId) && string.Equals(session.PaymentLinkId, monthlyPaymentLinkId, StringComparison.Ordinal))
-            {
-                plan = SubscriptionPlan.Monthly;
-            }
-            else if ((session.AmountTotal ?? 0) >= 10000)
-            {
-                // Fallback by amount when Payment Link IDs are not configured.
-                plan = SubscriptionPlan.Annual;
-            }
-
-            var now = DateTime.UtcNow;
-            var end = plan == SubscriptionPlan.Annual ? now.AddYears(1) : now.AddMonths(1);
-
-            var activeSubscriptions = await db.Subscriptions
-                .Where(s => s.UserId == userId &&
-                           (s.Status == SubscriptionStatus.Active || s.Status == SubscriptionStatus.Trialing) &&
-                           s.ProviderSubscriptionId != session.Id)
-                .ToListAsync();
-
-            foreach (var activeSub in activeSubscriptions)
-            {
-                activeSub.Status = SubscriptionStatus.Canceled;
-                activeSub.CanceledAtUtc = now;
-                activeSub.UpdatedAtUtc = now;
-            }
-
-            var subscription = await db.Subscriptions
-                .FirstOrDefaultAsync(s => s.ProviderSubscriptionId == session.Id);
-
-            if (subscription == null)
-            {
-                subscription = new DbSubscription
-                {
-                    Id = Guid.NewGuid(),
-                    UserId = userId,
-                    Provider = "stripe",
-                    ProviderCustomerId = session.CustomerId,
-                    ProviderSubscriptionId = session.Id,
-                    ProviderPriceId = session.PaymentLinkId,
-                    Plan = plan,
-                    Status = SubscriptionStatus.Active,
-                    StartedAtUtc = now,
-                    CurrentPeriodStartUtc = now,
-                    CurrentPeriodEndUtc = end,
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now
-                };
-                db.Subscriptions.Add(subscription);
-            }
-            else
-            {
-                subscription.UserId = userId;
-                subscription.ProviderCustomerId = session.CustomerId;
-                subscription.ProviderPriceId = session.PaymentLinkId ?? subscription.ProviderPriceId;
-                subscription.Plan = plan;
-                subscription.Status = SubscriptionStatus.Active;
-                subscription.StartedAtUtc ??= now;
-                subscription.CurrentPeriodStartUtc = now;
-                subscription.CurrentPeriodEndUtc = end;
-                subscription.CanceledAtUtc = null;
-                subscription.UpdatedAtUtc = now;
-            }
-
-            await db.SaveChangesAsync();
-            log.LogInformation(
-                "Upserted payment-link entitlement. sessionId={SessionId} userId={UserId} plan={Plan} periodEnd={End} paymentLinkId={PaymentLinkId}",
-                session.Id, userId, plan, end, session.PaymentLinkId);
-            return plan;
-        }
-        
         // Billing: Sync manual (reconciliação) — tenta buscar no Stripe e fazer upsert
         billing.MapPost("/sync", async (ClaimsPrincipal user, SyncReq req, [FromServices] AppDbContext db, [FromServices] IConfiguration cfg, [FromServices] ILogger<Program> log) =>
         {
@@ -725,7 +638,6 @@ public static class BillingEndpoints
             var subService = new StripeSubscriptionService();
             var custService = new Stripe.CustomerService();
             StripeSubscription? sub = null;
-            CheckoutSession? checkoutSessionCandidate = null;
             string? emailHintFromCheckout = null;
         
             try
@@ -739,7 +651,6 @@ public static class BillingEndpoints
                     {
                         var checkoutService = new CheckoutSessionService();
                         var checkoutSession = await checkoutService.GetAsync(req.CheckoutSessionId);
-                        checkoutSessionCandidate = checkoutSession;
 
                         emailHintFromCheckout = checkoutSession.CustomerDetails?.Email ?? checkoutSession.CustomerEmail;
 
@@ -859,65 +770,6 @@ public static class BillingEndpoints
                 return Results.BadRequest($"Falha ao consultar Stripe: {ex.Message}");
             }
 
-            if (sub == null)
-            {
-                var paymentSession = checkoutSessionCandidate;
-                var targetEmail = !string.IsNullOrWhiteSpace(req.Email)
-                    ? req.Email!.Trim().ToLowerInvariant()
-                    : (!string.IsNullOrWhiteSpace(emailHintFromCheckout)
-                        ? emailHintFromCheckout.Trim().ToLowerInvariant()
-                        : emailFromToken);
-
-                if (paymentSession == null)
-                {
-                    try
-                    {
-                        var checkoutService = new CheckoutSessionService();
-                        var recentSessions = await checkoutService.ListAsync(new Stripe.Checkout.SessionListOptions { Limit = 30 });
-
-                        paymentSession = recentSessions.Data?
-                            .Where(session =>
-                                string.Equals(session.Mode, "payment", StringComparison.OrdinalIgnoreCase) &&
-                                string.Equals(session.PaymentStatus, "paid", StringComparison.OrdinalIgnoreCase) &&
-                                string.Equals(session.Status, "complete", StringComparison.OrdinalIgnoreCase) &&
-                                string.Equals((session.CustomerDetails?.Email ?? session.CustomerEmail)?.Trim(), targetEmail, StringComparison.OrdinalIgnoreCase))
-                            .OrderByDescending(session => session.Created)
-                            .FirstOrDefault();
-
-                        if (paymentSession != null)
-                        {
-                            log.LogInformation(
-                                "Resolved paid checkout session by email during sync. sessionId={SessionId} email={Email}",
-                                paymentSession.Id, targetEmail);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        log.LogWarning(ex, "Failed to list recent checkout sessions for email fallback");
-                    }
-                }
-
-                if (paymentSession != null &&
-                    string.Equals(paymentSession.Mode, "payment", StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(paymentSession.PaymentStatus, "paid", StringComparison.OrdinalIgnoreCase))
-                {
-                    var sessionEmail = paymentSession.CustomerDetails?.Email ?? paymentSession.CustomerEmail;
-                    var resolvedUser = await db.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Email == emailFromToken);
-                    if (!string.IsNullOrWhiteSpace(sessionEmail))
-                    {
-                        resolvedUser = await db.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Email == sessionEmail) ?? resolvedUser;
-                    }
-
-                    if (resolvedUser != null)
-                    {
-                        var mappedPlan = await UpsertPaymentLinkPurchase(paymentSession, resolvedUser.Id, db, cfg, log);
-                        log.LogInformation("/api/billing/sync SUCCESS via payment session: sessionId={SessionId} userId={UserId} plan={Plan}",
-                            paymentSession.Id, resolvedUser.Id, mappedPlan);
-                        return Results.Ok(new { ok = true, subId = paymentSession.Id, status = "active", plan = mappedPlan.ToString().ToLowerInvariant() });
-                    }
-                }
-            }
-        
             if (sub == null) 
             {
                 log.LogWarning("No subscription found in Stripe for user {Email}", emailFromToken);
