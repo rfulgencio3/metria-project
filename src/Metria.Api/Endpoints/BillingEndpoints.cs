@@ -214,6 +214,38 @@ public static class BillingEndpoints
                 }
                 return Results.BadRequest("priceId ou plan obrigatório");
             }
+
+            // Validate configured price before creating Checkout Session to return explicit diagnostics.
+            try
+            {
+                var priceService = new PriceService();
+                var stripePrice = await priceService.GetAsync(effectivePriceId);
+                if (stripePrice == null)
+                {
+                    return Results.BadRequest("Preço Stripe não encontrado.");
+                }
+                if (!stripePrice.Active)
+                {
+                    return Results.BadRequest("Preço Stripe está inativo.");
+                }
+                if (!string.Equals(stripePrice.Type, "recurring", StringComparison.OrdinalIgnoreCase) || stripePrice.Recurring == null)
+                {
+                    return Results.BadRequest("Preço Stripe configurado não é recorrente (subscription).");
+                }
+                if (requestedPlan == "monthly" && !string.Equals(stripePrice.Recurring.Interval, "month", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Results.BadRequest("Preço mensal configurado não possui recorrência mensal.");
+                }
+                if (requestedPlan == "annual" && !string.Equals(stripePrice.Recurring.Interval, "year", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Results.BadRequest("Preço anual configurado não possui recorrência anual.");
+                }
+            }
+            catch (StripeException ex)
+            {
+                log.LogError(ex, "Failed to validate Stripe price {PriceId} for plan {Plan}", effectivePriceId, requestedPlan);
+                return Results.BadRequest($"Falha ao validar preço no Stripe: {ex.StripeError?.Message ?? ex.Message}");
+            }
         
             var successUrl = string.IsNullOrWhiteSpace(safeReq.SuccessUrl)
                 ? ($"{(cfg["FrontendOrigin"] ?? "http://localhost:5173").TrimEnd('/')}/dashboard?checkout=success")
@@ -275,7 +307,16 @@ public static class BillingEndpoints
         
             var service = new CheckoutSessionService();
             log.LogInformation("POST /api/billing/checkout -> user {Email} ({UserId}) plan={Plan} price={PriceId} success={Success} cancel={Cancel}", email, u.Id, requestedPlan, effectivePriceId, successUrl, cancelUrl);
-            var session = await service.CreateAsync(options);
+            CheckoutSession session;
+            try
+            {
+                session = await service.CreateAsync(options);
+            }
+            catch (StripeException ex)
+            {
+                log.LogError(ex, "Stripe checkout creation failed for user {Email} ({UserId}) plan={Plan} price={PriceId}", email, u.Id, requestedPlan, effectivePriceId);
+                return Results.BadRequest($"Falha ao criar checkout no Stripe: {ex.StripeError?.Message ?? ex.Message}");
+            }
             log.LogInformation("Checkout Session created: id={SessionId} url={Url}", session.Id, session.Url);
             return Results.Ok(new { url = session.Url });
         }).RequireAuthorization();
