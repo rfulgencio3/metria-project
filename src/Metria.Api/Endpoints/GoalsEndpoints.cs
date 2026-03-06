@@ -150,20 +150,16 @@ public static class GoalsEndpoints
             var goal = await db.Goals.FirstOrDefaultAsync(g => g.Id == id && g.UserId == account.Id && g.IsActive);
             if (goal is null) return Results.NotFound();
 
+            var hasActiveSubGoals = await db.SubGoals.AsNoTracking()
+                .AnyAsync(sg => sg.GoalId == goal.Id && sg.IsActive);
+            if (hasActiveSubGoals)
+            {
+                return Results.Conflict("Nao e possivel excluir uma meta que possui sub-metas ativas.");
+            }
+
             goal.IsActive = false;
             goal.UpdatedAtUtc = DateTime.UtcNow;
             goal.UpdatedBy = email;
-
-            var activeSubGoals = await db.SubGoals
-                .Where(sg => sg.GoalId == goal.Id && sg.IsActive)
-                .ToListAsync();
-
-            foreach (var subGoal in activeSubGoals)
-            {
-                subGoal.IsActive = false;
-                subGoal.UpdatedAtUtc = DateTime.UtcNow;
-                subGoal.UpdatedBy = email;
-            }
 
             await db.SaveChangesAsync();
             return Results.NoContent();
