@@ -1,8 +1,11 @@
-Backlog / Ideas
+﻿Backlog / Ideas (Backend)
 
-- Add mapping table (StripeCustomerId → UserId) to strengthen association when Payment Links email differs.
-- Add retry/backfill job to reconcile subscriptions nightly via Stripe API.
-- Harden webhook security (idempotency keys, request size limits, structured logging).
-- Add metrics around webhook deliveries and subscription state changes.
-- Expose admin endpoint to view raw last webhook payloads for a user.
-
+- Add persistent idempotency store for webhook events (database-based), not only in-memory cache.
+- Add a mapping table `StripeCustomerId -> UserId` to reduce dependency on email matching.
+- Add scheduled reconciliation job to backfill subscriptions from Stripe API.
+- Add observability:
+  - metrics for webhook delivery and processing latency
+  - counters for subscription state transitions
+- Externalize ASP.NET DataProtection keys for multi-instance production scenarios.
+- Add automated smoke checks post-deploy (`/health-check`, OAuth start redirect, webhook signature validation test).
+- Add runbook section for Railway domain/ingress incidents (502 with healthy container).

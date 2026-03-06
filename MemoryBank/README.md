@@ -1,43 +1,59 @@
-Metria API — MemoryBank
+﻿Metria API - MemoryBank
 
 Purpose
-- Centralize knowledge for humans/AI: architecture, env, Stripe notes, and future items.
+- Consolidate backend architecture, operational setup, and troubleshooting notes.
 
 Project Snapshot
-- ASP.NET Core (Minimal APIs), .NET 9.
-- Data: PostgreSQL via EF Core (AppDbContext).
-- Auth: JWT (email in claims). Front sends `Authorization: Bearer <token>`.
+- ASP.NET Core Minimal APIs on .NET 9.
+- EF Core + PostgreSQL.
+- JWT auth for API endpoints.
+- Google OAuth login flow.
+- Stripe billing with webhook processing.
 
-Key Models
-- `User` (Id, Name, Email, PasswordHash, BirthDate, ...)
-- `Goal` (soft-delete via `IsActive`)
-- `Subscription` (provider-agnostic; plan/status enums; period fields; provider IDs)
+Runtime and Hosting
+- Current production deploy uses Railway + Dockerfile.
+- Service listens on `0.0.0.0:$PORT` in container.
+- Health endpoint: `GET /health-check`.
 
-Endpoints (billing)
-- `POST /api/billing/checkout` (optional): creates Stripe Checkout Session (mode=subscription)
-- `POST /api/billing/portal`: opens customer billing portal
-- `GET /api/billing/subscription`: returns `{ active, plan, renewsAtUtc }` for current user
-- `GET /api/billing/subscriptions/history`: subscription history
-- `POST /api/billing/webhook`: Stripe webhooks (checkout.session.completed & customer.subscription.*)
-- `POST /api/billing/sync`: reconcile by subscription/customer/email
+Environment Variables (backend)
+- Database:
+  - `DATABASE_URL` or `POSTGRES_CONNECTION`
+- JWT:
+  - `Jwt__Issuer`
+  - `Jwt__Audience`
+  - `Jwt__Key`
+  - `Jwt__ExpiresInSeconds`
+- App URLs:
+  - `FRONTEND_ORIGIN`
+  - `BACKEND_BASE_URL`
+- Google OAuth:
+  - `GOOGLE_CLIENT_ID`
+  - `GOOGLE_CLIENT_SECRET`
+- Stripe:
+  - `STRIPE_SECRET_KEY`
+  - `STRIPE_WEBHOOK_SECRET`
+  - `STRIPE_MONTHLY_PRICE_ID` (optional)
+  - `STRIPE_ANNUAL_PRICE_ID` (optional)
+- Swagger in production:
+  - `ENABLE_SWAGGER=true`
 
-Stripe Config (env/appsettings)
-- `Stripe:SecretKey` (or `STRIPE_SECRET_KEY`)
-- `Stripe:WebhookSecret` (or `STRIPE_WEBHOOK_SECRET`)
-- Optional mapping: `Stripe:MonthlyPriceId`, `Stripe:AnnualPriceId`
-- CORS/front:
-  - `FrontendOrigin` (or `FRONTEND_ORIGIN`)
-  - `BackendBaseUrl` (used for oauth flows)
+OAuth Notes
+- Backend callback endpoint: `/api/auth/google/callback`.
+- If Google returns to `/?code=...`, redirect URI is misconfigured in Google Cloud.
 
-Local Dev
-- DB connection: `POSTGRES_CONNECTION` or `ConnectionStrings:Postgres`
-- Migrate: `dotnet ef database update` (auto-migrate also runs at startup)
-- Stripe CLI (dev):
-  - Test: `stripe listen --events checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted --forward-to http://localhost:5104/api/billing/webhook`
-  - Live: add `--live` when using live Payment Links
+Stripe Notes
+- Webhook endpoint: `/api/billing/webhook`.
+- Required events:
+  - `checkout.session.completed`
+  - `customer.subscription.created`
+  - `customer.subscription.updated`
+  - `customer.subscription.deleted`
+
+Operational Notes
+- Startup runs `db.Database.Migrate()`.
+- DataProtection warnings in container are expected unless key ring is externalized.
 
 Troubleshooting
-- Webhook not firing: check `--live` vs test; ensure `STRIPE_WEBHOOK_SECRET` matches current listen.
-- Subscription not active after payment: confirm `customer.subscription.updated` arrived; check logs.
-- Email mismatch (Payment Links): prefer Checkout Sessions (client_reference_id) or add mapping by customer.
-
+- `dotnet: command not found`: wrong runtime/build strategy.
+- `502` with healthy logs: verify Railway domain routing and current active deployment.
+- `404` at root in production can be expected when Swagger is disabled.
