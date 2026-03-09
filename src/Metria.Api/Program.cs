@@ -1,4 +1,4 @@
-﻿using Metria.Api.Data;
+using Metria.Api.Data;
 using Metria.Api.Endpoints;
 using Metria.Api.Repositories;
 using Metria.Api.Services;
@@ -22,14 +22,14 @@ if (!string.IsNullOrWhiteSpace(stripeSecret))
     Stripe.StripeConfiguration.ApiKey = stripeSecret;
 }
 
-var corsOrigin = builder.Environment.IsDevelopment()
-    ? "http://localhost:5173"
-    : (Environment.GetEnvironmentVariable("FRONTEND_ORIGIN") ?? "https://seu-dominio-frontend");
+var corsOrigins = builder.Environment.IsDevelopment()
+    ? new[] { "http://localhost:3000", "http://localhost:5173" }
+    : new[] { Environment.GetEnvironmentVariable("FRONTEND_ORIGIN") ?? "https://seu-dominio-frontend" };
 
 builder.Services.AddCors(o =>
 {
     o.AddPolicy("frontend", p =>
-        p.WithOrigins(corsOrigin).AllowAnyHeader().AllowAnyMethod().AllowCredentials());
+        p.WithOrigins(corsOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials());
 });
 
 var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:Key"]!));
@@ -171,4 +171,3 @@ static string NormalizePostgresConnectionString(string raw)
 
     return builder.ConnectionString;
 }
-
