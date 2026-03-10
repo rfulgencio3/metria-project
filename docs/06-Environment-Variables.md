@@ -12,10 +12,15 @@ Required:
 - `FRONTEND_ORIGIN`
 - `BACKEND_BASE_URL`
 
+Optional frontend origin expansion:
+
+- `FRONTEND_ORIGINS`
+
 Notes:
 
 - `DATABASE_URL` can be in URI format (`postgresql://...`) and is normalized by the backend.
 - `FRONTEND_ORIGIN` is used by CORS and OAuth fallback logic.
+- `FRONTEND_ORIGINS` can be used when the backend must accept more than one frontend origin, such as the published web domain plus `http://localhost:3000` for local validation.
 - `BACKEND_BASE_URL` is used to build Google callback URL.
 
 ## Google OAuth
@@ -52,6 +57,7 @@ Optional:
 ```env
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 FRONTEND_ORIGIN=https://metria-web-production.up.railway.app
+FRONTEND_ORIGINS=https://metria-web-production.up.railway.app,http://localhost:3000
 BACKEND_BASE_URL=https://metria-project-production.up.railway.app
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...

@@ -27,6 +27,15 @@ Optional:
 - `ENABLE_SWAGGER=true`
 - `STRIPE_MONTHLY_PRICE_ID`
 - `STRIPE_ANNUAL_PRICE_ID`
+- `FRONTEND_ORIGINS`
+
+## Local Validation Against Railway
+
+If you need to call the Railway backend from `http://localhost:3000`, configure:
+
+- `FRONTEND_ORIGINS=https://metria-web-production.up.railway.app,http://localhost:3000`
+
+Keep `FRONTEND_ORIGIN` pointing to the primary published frontend domain. Use `FRONTEND_ORIGINS` only to extend the allowed CORS list.
 
 ## Post-Deploy Smoke
 

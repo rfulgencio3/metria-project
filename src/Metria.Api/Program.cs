@@ -22,9 +22,36 @@ if (!string.IsNullOrWhiteSpace(stripeSecret))
     Stripe.StripeConfiguration.ApiKey = stripeSecret;
 }
 
+string[] GetConfiguredCorsOrigins()
+{
+    var origins = new List<string>();
+
+    var singleOrigin = Environment.GetEnvironmentVariable("FRONTEND_ORIGIN");
+    if (!string.IsNullOrWhiteSpace(singleOrigin))
+    {
+        origins.Add(singleOrigin.Trim());
+    }
+
+    var multiOrigins = Environment.GetEnvironmentVariable("FRONTEND_ORIGINS");
+    if (!string.IsNullOrWhiteSpace(multiOrigins))
+    {
+        origins.AddRange(
+            multiOrigins
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        );
+    }
+
+    if (origins.Count == 0)
+    {
+        origins.Add("https://seu-dominio-frontend");
+    }
+
+    return origins.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+}
+
 var corsOrigins = builder.Environment.IsDevelopment()
     ? new[] { "http://localhost:3000", "http://localhost:5173" }
-    : new[] { Environment.GetEnvironmentVariable("FRONTEND_ORIGIN") ?? "https://seu-dominio-frontend" };
+    : GetConfiguredCorsOrigins();
 
 builder.Services.AddCors(o =>
 {
